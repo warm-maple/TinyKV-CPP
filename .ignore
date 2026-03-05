@@ -32,6 +32,13 @@ tmp/
 # Test artifacts
 /test/*.kv_log.wal
 
+# Ignore compiled test binaries (built artifacts)
+/test/io_test
+/test/skiplist_test
+
+# Ignore include directory helper binary (if present)
+/Include/SkipList
+
 # Python env / caches (some tools in repo)
 __pycache__/
 *.py[cod]
