@@ -1,0 +1,42 @@
+# Build artifacts
+/build/
+
+# CMake files
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+Makefile
+
+# Compiled binaries
+*.o
+*.obj
+*.so
+*.a
+*.exe
+
+# Editor and IDE files
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary
+*.log
+tmp/
+*.tmp
+
+# Test artifacts
+/test/*.kv_log.wal
+
+# Python env / caches (some tools in repo)
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+# macOS Finder
+.Spotlight-V100
