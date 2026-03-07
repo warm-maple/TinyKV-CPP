@@ -3,19 +3,38 @@
 #include <memory>
 #include <random>
 #include <cstring>
+#include <string>
 #include <iostream>
 #include <fstream>
+#include <type_traits>
 template <typename K, typename V>
 class SkipList
 {
 public:
+  struct Node;
+class Iterator {
+    public:
+        Iterator(Node* node) : current_(node) {}
+        
+        bool Valid() const { return current_ != nullptr; }
+        void Next() { if (current_) current_ = current_->forward[0]; }
+        K& Key() const { return current_->key; }
+        V& Value() const { return current_->value; }
+        bool IsDelete() const { return current_->is_delete; }
+        
+    private:
+        Node* current_;
+    };
+    Iterator GetIterator() {
+        return Iterator(head_->forward[0]); 
+    }
     void display()
     {
         std::cout << "\n--- SkipList Structure ---" << std::endl;
         for (int i = level_; i >= 0; i--)
         {
             Node *acc = head_->forward[i];
-            while (acc != nullptr && acc->forward[i] != nullptr)
+            while (acc != nullptr)
             {
                 std::cout << acc->key << " ";
                 acc = acc->forward[i];
@@ -25,7 +44,6 @@ public:
     }
     void remove(const K &key)
     {
-        write_log(1, std::to_string(key), "");
         internal_insert(key, V(), true);
     }
     bool search(const K &key, V &value)
@@ -46,21 +64,29 @@ public:
         else
             return false;
     }
-    SkipList()
-    {   
-        head_ = new Node(K(), V(), kMaxLevel,false);
-        level_ = 0;
-        load_from_wal("kv_log.wal");
-        log_file_.open("kv_log.wal", std::ios::app | std::ios::binary);
+    SkipList() : is_recovering_(false), level_(0), node_count_(0), sst_file_count_(0), current_mem_size_(0)
+    {
+        head_ = new Node(K(), V(), kMaxLevel, false);
     }
     ~SkipList()
     {
-        log_file_.close();
+        Node *acc = head_->forward[0];
+        Node *next = acc;
+        while (next != nullptr)
+        {
+            next = acc->forward[0];
+            delete (acc);
+            acc = next;
+        }
+        delete (head_);
     }
     void insert(const K &key, const V &value)
     {
-        write_log(0, std::to_string(key), value);
         internal_insert(key, value, false);
+    }
+    uint32_t get_current_size()
+    {
+        return current_mem_size_;
     }
 
 private:
@@ -68,46 +94,26 @@ private:
     {
         K key;
         V value;
-        Node **forward;
+        std::vector<Node *> forward;
         bool is_delete;
         int node_level;
-        Node(K key_, V value_, int level,int is_delete_) : key(key_), value(value_), node_level(level), is_delete(is_delete_)
+        Node(K key_, V value_, int level, bool is_delete_) : key(key_), value(value_), forward(level + 1, nullptr), is_delete(is_delete_), node_level(level)
         {
-            forward = new Node *[node_level + 1];
-            memset(forward, 0, sizeof(Node *) * (node_level + 1));
-        }
-        ~Node()
-        {
-            delete[] forward;
         }
     };
-    void load_from_wal(const std::string & wal_log_path){
-        std::ifstream in(wal_log_path,std::ios::binary);
-        if(!in.is_open())return;
-        char type;
-        while(in.read(&(type),sizeof(type))){
-            uint32_t key_len;
-            in.read(reinterpret_cast<char*>(&key_len),sizeof(key_len));
-            std::string key_str(key_len,'\0');
-            in.read(&key_str[0],key_len);
-            uint32_t value_len;
-            in.read(reinterpret_cast<char*>(&value_len),sizeof(value_len));
-            std::string value_str(value_len,'\0');
-            in.read(&value_str[0],value_len);
-            int key=std::stoi(key_str);
-            if(type==0){
-                internal_insert(key,value_str,false);
-            }else{internal_insert(key,"",true);}
-           
-        }
-         in.close();
-            std::cout << "--- 已成功从 WAL 日志重放数据，跳表恢复至断电前状态 ---" << std::endl;
 
-    }
+    Node *head_;
+    int level_;
+    int node_count_;
+    const int kMaxLevel = 32;
+    std::mt19937 generator_{std::random_device{}()};
+    uint32_t current_mem_size_;
+    const uint32_t kMaxMemTableSize = 4 * 1024 * 1024;
+    int sst_file_count_;
     void internal_insert(const K &key, const V &value, bool is_delete_mark)
     {
         int newlevel = GetRandomLevel();
-        Node *position[kMaxLevel] = {nullptr};
+        std::vector<Node *> position(kMaxLevel + 1, nullptr);
         Node *nowpos = head_;
         for (int i = level_; i >= 0; i--)
         {
@@ -140,32 +146,29 @@ private:
             position[i]->forward[i] = newnode;
         }
         node_count_++;
+        uint32_t node_size = sizeof(Node) + (newlevel + 1) * sizeof(Node *);
+        if constexpr (std::is_same_v<K, std::string>)
+            node_size += key.size();
+        else
+            node_size += sizeof(key);
+
+        if (!is_delete_mark)
+        {
+            if constexpr (std::is_same_v<V, std::string>)
+                node_size += value.size();
+            else
+                node_size += sizeof(value);
+        }
+        current_mem_size_+=node_size;
     }
-    std::ofstream log_file_;
-    Node *head_;
-    int level_;
-    int node_count_ = 0;
-    const int kMaxLevel = 32;
     int GetRandomLevel()
     {
         int k = 0;
-        while (rand() % 2)
+        std::uniform_int_distribution<int> dist(0, 1);
+        while (dist(generator_) && k < kMaxLevel)
+        {
             k++;
-        k = k < kMaxLevel ? k : kMaxLevel;
+        }
         return k;
-    }
-    void write_log(int type, const std::string &key_str, const std::string &value_str)
-    {
-        if (!log_file_.is_open())
-            return;
-        char t = static_cast<char>(type);
-        log_file_.write(reinterpret_cast<char *>(&t), sizeof(t));
-        uint32_t key_len = key_str.size();
-        log_file_.write(reinterpret_cast<char *>(&key_len), sizeof(key_len));
-        log_file_.write(key_str.data(), key_len);
-        uint32_t value_len = value_str.size();
-        log_file_.write(reinterpret_cast<char *>(&value_len), sizeof(value_len));
-        log_file_.write(value_str.data(), value_len);
-        log_file_.flush();
     }
 };
