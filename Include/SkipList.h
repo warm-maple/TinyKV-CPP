@@ -10,8 +10,9 @@
 template <typename K, typename V>
 class SkipList
 {
+private:
+    struct Node;
 public:
-  struct Node;
 class Iterator {
     public:
         Iterator(Node* node) : current_(node) {}
@@ -46,7 +47,7 @@ class Iterator {
     {
         internal_insert(key, V(), true);
     }
-    bool search(const K &key, V &value)
+    int search(const K &key, V &value)
     {
         Node *accr = head_;
         for (int i = level_; i >= 0; i--)
@@ -56,15 +57,18 @@ class Iterator {
                 accr = accr->forward[i];
             }
         }
-        if (accr->forward[0] != nullptr && accr->forward[0]->key == key && accr->forward[0]->is_delete == false)
+        if (accr->forward[0] != nullptr && accr->forward[0]->key == key)
         {
-            value = accr->forward[0]->value;
-            return true;
+            if (accr->forward[0]->is_delete) {
+                return -1;
+            } else {
+                value = accr->forward[0]->value;
+                return 1;
+            }
         }
-        else
-            return false;
+        return 0;
     }
-    SkipList() : is_recovering_(false), level_(0), node_count_(0), sst_file_count_(0), current_mem_size_(0)
+    SkipList() :  level_(0), node_count_(0), sst_file_count_(0), current_mem_size_(0)
     {
         head_ = new Node(K(), V(), kMaxLevel, false);
     }
@@ -101,7 +105,6 @@ private:
         {
         }
     };
-
     Node *head_;
     int level_;
     int node_count_;

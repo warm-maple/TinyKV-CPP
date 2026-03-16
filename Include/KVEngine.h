@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <thread>
 #include "SSTableBuilder.h"
+#include "SSTableReader.h"
 class KVEngine
 {
 public:
@@ -45,7 +46,55 @@ public:
         WriteWal(0, key, value);
         active_mem_->insert(key, value);
     }
+    bool get(const std::string& key, std::string& value) {
+        std::shared_ptr<SkipList<std::string, std::string>> active;
+        std::shared_ptr<SkipList<std::string, std::string>> imm;
+        std::vector<std::shared_ptr<SSTableReader>> readers;
 
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            active = active_mem_;
+            imm = imm_mem_;
+        }
+        {
+            std::unique_lock<std::mutex> r_lock(reader_mutex_);
+            readers = sst_readers_; 
+        }
+
+        int active_res = active->search(key, value);
+        if (active_res == 1) return true;       
+        if (active_res == -1) return false;    
+        if (imm) {
+            int imm_res = imm->search(key, value);
+            if (imm_res == 1) return true;
+            if (imm_res == -1) return false;
+        }
+        for (auto& reader : readers) {
+            SearchResult res = reader->get(key, value);
+            if (res == SearchResult::FOUND) {
+                return true;
+            } else if (res == SearchResult::DELETED) {
+                return false; 
+            }
+
+        }
+
+        return false;
+    }
+    void remove(const std::string& key) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        
+        while (active_mem_->get_current_size() >= kMaxMemTableSize && imm_mem_ != nullptr) {
+            bg_cv_.wait(lock);
+        }
+        if (active_mem_->get_current_size() >= kMaxMemTableSize) {
+            imm_mem_ = active_mem_;
+            active_mem_ = std::make_shared<SkipList<std::string, std::string>>();
+            bg_cv_.notify_one();
+        }
+        WriteWal(1, key, "");
+        active_mem_->remove(key);
+    }
 private:
     std::shared_ptr<SkipList<std::string, std::string>> active_mem_;
     std::shared_ptr<SkipList<std::string, std::string>> imm_mem_;
@@ -56,6 +105,8 @@ private:
     int sst_file_count_;
     const uint32_t kMaxMemTableSize = 4 * 1024 * 1024;
       std::ofstream wal_file_;
+      std::mutex reader_mutex_; 
+    std::vector<std::shared_ptr<SSTableReader>> sst_readers_;
       void WriteWal(int type, const std::string& key, const std::string& value) {
         if (!wal_file_.is_open()) return;
         char t = static_cast<char>(type);
@@ -113,11 +164,16 @@ private:
                 std::cout << "[BG_Thread] 开始将 MemTable 落盘至: " << sst_name << " ...\n";
                 auto iter = mem_to_flush->GetIterator();
                 while (iter.Valid()) {
-
-                builder.add(iter.IsDelete(), iter.Key(), iter.Value());
-                iter.Next();
-            }
+                    builder.add(iter.IsDelete(), iter.Key(), iter.Value());
+                    iter.Next();
+                }
+                builder.finish();
                 std::cout << "[BG Tread] " << sst_name << " 落盘完成！\n";
+                auto new_reader = std::make_shared<SSTableReader>(sst_name);
+                {
+                    std::unique_lock<std::mutex> r_lock(reader_mutex_);
+                    sst_readers_.insert(sst_readers_.begin(), new_reader);
+                }
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
                 imm_mem_ = nullptr; 
