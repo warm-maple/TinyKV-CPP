@@ -29,17 +29,25 @@ Thumbs.db
 tmp/
 *.tmp
 
-# Test artifacts
-/test/*.kv_log.wal
+# ===== Data files =====
+# SSTable data directory
+/data/
+*.sst
+# WAL log directory
+/log/
 
-# Ignore compiled test binaries (built artifacts)
+# Compiled test binaries
 /test/io_test
 /test/skiplist_test
+/kv_test
+
+# Test data directory
+test/
 
 # Ignore include directory helper binary (if present)
 /Include/SkipList
 
-# Python env / caches (some tools in repo)
+# Python env / caches
 __pycache__/
 *.py[cod]
 venv/

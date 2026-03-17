@@ -48,6 +48,7 @@ public:
         }
     }
     SearchResult get(const std::string& target_key, std::string& value) {
+        infile_.clear();
         if (index_entries_.empty()) return SearchResult::NOT_FOUND;
         auto it = std::lower_bound(index_entries_.begin(), index_entries_.end(), target_key,
             [](const IndexEntry& entry, const std::string& key) {

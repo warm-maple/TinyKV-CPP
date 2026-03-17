@@ -9,15 +9,22 @@
 #include <thread>
 #include "SSTableBuilder.h"
 #include "SSTableReader.h"
+#include <filesystem>
+#include <algorithm>
 class KVEngine
 {
 public:
-    KVEngine() : stop_bg_thread_(false), sst_file_count_(0)
+    KVEngine() : stop_bg_thread_(false), sst_file_count_(0),
+                 data_dir_("data"), log_dir_("log")
     {
+        std::filesystem::create_directories(data_dir_);
+        std::filesystem::create_directories(log_dir_);
         active_mem_ = std::make_shared<SkipList<std::string, std::string>>();
         imm_mem_ = nullptr;
-        LoadFromWal("kv_log.wal");
-        wal_file_.open("kv_log.wal", std::ios::app | std::ios::binary);
+        LoadSSTables();
+        std::string wal_path = log_dir_ + "/kv_log.wal";
+        LoadFromWal(wal_path);
+        wal_file_.open(wal_path, std::ios::app | std::ios::binary);
         bg_thread_ = std::thread(&KVEngine::BackgroundFlushThread, this);
     }
     ~KVEngine()
@@ -107,6 +114,8 @@ private:
       std::ofstream wal_file_;
       std::mutex reader_mutex_; 
     std::vector<std::shared_ptr<SSTableReader>> sst_readers_;
+    const std::string data_dir_;
+    const std::string log_dir_;
       void WriteWal(int type, const std::string& key, const std::string& value) {
         if (!wal_file_.is_open()) return;
         char t = static_cast<char>(type);
@@ -145,6 +154,29 @@ private:
         in.close();
         std::cout << "[KVEngine] 已成功从 WAL 日志重放数据。\n";
     }
+    void LoadSSTables() {
+        std::vector<std::pair<int, std::string>> sst_files;
+        for (const auto& entry : std::filesystem::directory_iterator(data_dir_)) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+                if (filename.find("data_") == 0 && filename.find(".sst") != std::string::npos) {
+                    int num = std::stoi(filename.substr(5, filename.find(".sst") - 5));
+                    sst_files.push_back({num, entry.path().string()});
+                }
+            }
+        }
+        std::sort(sst_files.begin(), sst_files.end(), [](const auto& a, const auto& b) {
+            return a.first > b.first; 
+        });
+        for (const auto& file : sst_files) {
+            sst_readers_.push_back(std::make_shared<SSTableReader>(file.second));
+        }
+        if (!sst_files.empty()) {
+            sst_file_count_ = sst_files.front().first + 1;
+            std::cout << "[KVEngine] 成功挂载 " << sst_files.size() << " 个历史 SSTable 文件！\n";
+        }
+    }
+    
     void BackgroundFlushThread()
     {
         while(true){
@@ -159,7 +191,7 @@ private:
             mem_to_flush=imm_mem_;
             }
             if(mem_to_flush){
-                std::string sst_name = "data_" + std::to_string(sst_file_count_++) + ".sst";
+                std::string sst_name = data_dir_ + "/data_" + std::to_string(sst_file_count_++) + ".sst";
                 SSTableBuilder builder(sst_name);
                 std::cout << "[BG_Thread] 开始将 MemTable 落盘至: " << sst_name << " ...\n";
                 auto iter = mem_to_flush->GetIterator();
@@ -181,7 +213,8 @@ private:
                 if (wal_file_.is_open()) {
                     wal_file_.close();
                 }
-                wal_file_.open("kv_log.wal", std::ios::out | std::ios::binary | std::ios::trunc);
+                std::string wal_path = log_dir_ + "/kv_log.wal";
+                wal_file_.open(wal_path, std::ios::out | std::ios::binary | std::ios::trunc);
                 std::cout << "[KVEngine] WAL 日志已清空重置。\n";
                 
                 bg_cv_.notify_all(); 

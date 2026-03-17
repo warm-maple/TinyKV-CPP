@@ -10,7 +10,7 @@ include_directories(src/include)
 find_package(GTest REQUIRED)
 
 # 编译测试文件
-add_executable(skiplist_test test/skiplist_test.cpp)
+add_executable(main test/t/main.cpp)
 
 # 链接 GTest 和 线程库
-target_link_libraries(skiplist_test GTest::GTest GTest::Main pthread)
+target_link_libraries(main GTest::GTest GTest::Main pthread)
