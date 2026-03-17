@@ -4,6 +4,8 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <memory>
+#include "BloomFilter.h"
 enum class SearchResult {
     FOUND,     
     DELETED,    
@@ -17,19 +19,26 @@ public:
             throw std::runtime_error("无法打开 SSTable 文件: " + filename);
         }
         size_t file_size = infile_.tellg();
-        if (file_size < 8) {
+        if (file_size < 16) {
             throw std::runtime_error("SSTable 文件损坏（过小）");
         }
-        infile_.seekg(file_size - 8);
-        uint32_t index_offset;
-        uint32_t magic_number;
+        infile_.seekg(file_size - 16);
+        uint32_t bloom_offset, bloom_size, index_offset, magic_number;
+        infile_.read(reinterpret_cast<char*>(&bloom_offset), sizeof(bloom_offset));
+        infile_.read(reinterpret_cast<char*>(&bloom_size), sizeof(bloom_size));
         infile_.read(reinterpret_cast<char*>(&index_offset), sizeof(index_offset));
         infile_.read(reinterpret_cast<char*>(&magic_number), sizeof(magic_number));
         if (magic_number != 0xA1B2C3D4) {
             throw std::runtime_error("SSTable 魔数校验失败，文件已损坏！");
         }
+        if (bloom_size > 0) {
+            infile_.seekg(bloom_offset);
+            std::string bloom_data(bloom_size, '\0');
+            infile_.read(&bloom_data[0], bloom_size);
+            bloom_filter_ = std::make_unique<BloomFilter>(bloom_data);
+        }
         infile_.seekg(index_offset);
-        while (infile_.tellg() < file_size - 8) {
+        while (infile_.tellg() < static_cast<std::streamoff>(file_size - 16)) {
             IndexEntry entry;
             uint32_t key_len;
             infile_.read(reinterpret_cast<char*>(&key_len), sizeof(key_len));
@@ -50,6 +59,9 @@ public:
     SearchResult get(const std::string& target_key, std::string& value) {
         infile_.clear();
         if (index_entries_.empty()) return SearchResult::NOT_FOUND;
+        if (bloom_filter_ && !bloom_filter_->might_contain(target_key)) {
+            return SearchResult::NOT_FOUND;
+        }
         auto it = std::lower_bound(index_entries_.begin(), index_entries_.end(), target_key,
             [](const IndexEntry& entry, const std::string& key) {
                 return entry.last_key < key;
@@ -87,6 +99,7 @@ public:
 
 private:
     std::ifstream infile_;
+    std::unique_ptr<BloomFilter> bloom_filter_;
     struct IndexEntry {
         std::string last_key;
         uint32_t offset;

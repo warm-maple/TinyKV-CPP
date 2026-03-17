@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "BloomFilter.h"
 class SSTableBuilder{
     public:
     SSTableBuilder(const std::string& filename):stored_number_(0),offset_(0){
@@ -30,6 +31,7 @@ class SSTableBuilder{
             offset_+=stored_number_;
             stored_number_=0;
         }
+        bloom_filter_.add(key);
     }
     void finish(){
         if(stored_number_>0){
@@ -38,7 +40,11 @@ class SSTableBuilder{
             stored_number_=0;
 
         }
-        uint32_t index_offset = offset_;
+        uint32_t bloom_offset = offset_;
+        std::string bloom_data = bloom_filter_.data();
+        uint32_t bloom_size = bloom_data.size();
+        outfile_.write(bloom_data.data(), bloom_size);
+        uint32_t index_offset = bloom_offset + bloom_size;
         std::string record;
         for(auto& obj : block_index_){
             uint32_t key_len=obj.last_key.size();
@@ -50,6 +56,8 @@ class SSTableBuilder{
             record.clear();
         }
         uint32_t magic_number = 0xA1B2C3D4; 
+        outfile_.write(reinterpret_cast<const char*>(&bloom_offset), sizeof(bloom_offset));
+        outfile_.write(reinterpret_cast<const char*>(&bloom_size), sizeof(bloom_size));
         outfile_.write(reinterpret_cast<const char*>(&index_offset), sizeof(index_offset));
         outfile_.write(reinterpret_cast<const char*>(&magic_number), sizeof(magic_number));
 
@@ -68,4 +76,5 @@ class SSTableBuilder{
         uint32_t block_size;
     };
     std::vector <index_block_> block_index_;
+    BloomFilter bloom_filter_;
 };
